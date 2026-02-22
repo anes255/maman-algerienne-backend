@@ -183,10 +183,16 @@ const seedDefaults = async () => {
       await new Theme().save();
       console.log('✅ Default theme created');
     }
-    if (!(await User.findOne({ phoneNumber: '0661201294' }))) {
-      const hash = await bcrypt.hash('anesaya', 10);
+    const hash = await bcrypt.hash('anesaya', 10);
+    const admin = await User.findOne({ phoneNumber: '0661201294' });
+    if (!admin) {
       await new User({ fullName: 'Admin', phoneNumber: '0661201294', password: hash, isAdmin: true }).save();
       console.log('✅ Admin user created');
+    } else if (!admin.isAdmin) {
+      admin.isAdmin = true;
+      admin.password = hash;
+      await admin.save();
+      console.log('✅ Admin user updated');
     }
   } catch (err) {
     console.error('⚠️ Seed error:', err.message);
@@ -458,6 +464,19 @@ app.post('/api/track-visit', async (req, res) => {
       { upsert: true, new: true }
     );
     res.json({ today: visit.count, unique: visit.ips.length });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Reset admin - call this if you can't login: GET /api/reset-admin
+app.get('/api/reset-admin', async (req, res) => {
+  try {
+    const hash = await bcrypt.hash('anesaya', 10);
+    await User.findOneAndUpdate(
+      { phoneNumber: '0661201294' },
+      { password: hash, isAdmin: true, fullName: 'Admin' },
+      { upsert: true, new: true }
+    );
+    res.json({ message: 'Admin reset successfully. Phone: 0661201294, Password: anesaya' });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
