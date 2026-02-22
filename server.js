@@ -3,10 +3,8 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const multer = require('multer');
-const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const fs = require('fs');
 
 dotenv.config();
 
@@ -14,36 +12,37 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'maman-algerienne-secret-2024';
 
-// ─── Uploads directory ───
-const uploadsPath = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsPath)) fs.mkdirSync(uploadsPath, { recursive: true });
-
 // ─── Middleware ───
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsPath));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// ─── Multer config ───
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsPath),
-  filename: (req, file, cb) => {
-    const name = Date.now() + '-' + file.originalname.replace(/\s+/g, '-');
-    cb(null, name);
+// ─── Multer config (memory storage - no disk) ───
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/jpeg|jpg|png|gif|webp/.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Only images allowed'), false);
   }
 });
-
-const imageFilter = (req, file, cb) => {
-  if (/jpeg|jpg|png|gif|webp/.test(file.mimetype)) cb(null, true);
-  else cb(new Error('Only images allowed'), false);
-};
-
-const upload = multer({ storage, fileFilter: imageFilter, limits: { fileSize: 5 * 1024 * 1024 } });
 
 // ─── Helper ───
 const toBool = (v) => v === 'on' || v === true || v === 'true';
 
-// ─── Mongoose Schemas ───
+// ═══════════════════════════════════════
+//  SCHEMAS
+// ═══════════════════════════════════════
+
+// Image stored in MongoDB
+const ImageSchema = new mongoose.Schema({
+  data: { type: Buffer, required: true },
+  contentType: { type: String, required: true },
+  filename: String,
+  createdAt: { type: Date, default: Date.now }
+});
+const Image = mongoose.model('Image', ImageSchema);
+
 const UserSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   phoneNumber: { type: String, required: true, unique: true },
@@ -133,19 +132,49 @@ const ThemeSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+const SiteVisitSchema = new mongoose.Schema({
+  date: { type: String, unique: true },
+  count: { type: Number, default: 0 },
+  ips: [String]
+}, { timestamps: true });
+
 const User = mongoose.model('User', UserSchema);
 const Product = mongoose.model('Product', ProductSchema);
 const Article = mongoose.model('Article', ArticleSchema);
 const Ad = mongoose.model('Ad', AdSchema);
 const Order = mongoose.model('Order', OrderSchema);
 const Theme = mongoose.model('Theme', ThemeSchema);
-
-const SiteVisitSchema = new mongoose.Schema({
-  date: { type: String, unique: true },
-  count: { type: Number, default: 0 },
-  ips: [String]
-}, { timestamps: true });
 const SiteVisit = mongoose.model('SiteVisit', SiteVisitSchema);
+
+// ═══════════════════════════════════════
+//  IMAGE HELPER - Save file buffer to MongoDB, return URL path
+// ═══════════════════════════════════════
+
+const saveImage = async (file) => {
+  const img = await new Image({
+    data: file.buffer,
+    contentType: file.mimetype,
+    filename: file.originalname
+  }).save();
+  return `/api/images/${img._id}`;
+};
+
+const saveMultipleImages = async (files) => {
+  return Promise.all(files.map(f => saveImage(f)));
+};
+
+// ─── Serve images from MongoDB ───
+app.get('/api/images/:id', async (req, res) => {
+  try {
+    const img = await Image.findById(req.params.id);
+    if (!img) return res.status(404).send('Image not found');
+    res.set('Content-Type', img.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000'); // cache 1 year
+    res.send(img.data);
+  } catch (err) {
+    res.status(500).send('Error loading image');
+  }
+});
 
 // ─── Auth Middleware ───
 const auth = (req, res, next) => {
@@ -276,9 +305,9 @@ app.post('/api/products', upload.fields([{ name: 'image', maxCount: 1 }, { name:
   try {
     const data = { ...req.body };
     if (data.featured !== undefined) data.featured = toBool(data.featured);
-    if (req.files?.image?.[0]) data.image = `/uploads/${req.files.image[0].filename}`;
+    if (req.files?.image?.[0]) data.image = await saveImage(req.files.image[0]);
     else if (!data.image) return res.status(400).json({ message: 'Image required' });
-    if (req.files?.images) data.images = req.files.images.map(f => `/uploads/${f.filename}`);
+    if (req.files?.images) data.images = await saveMultipleImages(req.files.images);
     res.status(201).json(await new Product(data).save());
   } catch (err) { res.status(400).json({ message: err.message }); }
 });
@@ -287,10 +316,11 @@ app.put('/api/products/:id', upload.fields([{ name: 'image', maxCount: 1 }, { na
   try {
     const data = { ...req.body };
     if (data.featured !== undefined) data.featured = toBool(data.featured);
-    if (req.files?.image) data.image = `/uploads/${req.files.image[0].filename}`;
+    if (req.files?.image?.[0]) data.image = await saveImage(req.files.image[0]);
     if (req.files?.images) {
-      const newImgs = req.files.images.map(f => `/uploads/${f.filename}`);
-      data.images = data.images ? [...JSON.parse(data.images), ...newImgs] : newImgs;
+      const newImgs = await saveMultipleImages(req.files.images);
+      const existing = data.images ? (typeof data.images === 'string' ? JSON.parse(data.images) : data.images) : [];
+      data.images = [...existing, ...newImgs];
     }
     res.json(await Product.findByIdAndUpdate(req.params.id, data, { new: true }));
   } catch (err) { res.status(400).json({ message: err.message }); }
@@ -328,9 +358,9 @@ app.post('/api/articles', upload.fields([{ name: 'image', maxCount: 1 }, { name:
   try {
     const data = { ...req.body };
     if (data.featured !== undefined) data.featured = toBool(data.featured);
-    if (req.files?.image?.[0]) data.image = `/uploads/${req.files.image[0].filename}`;
+    if (req.files?.image?.[0]) data.image = await saveImage(req.files.image[0]);
     else if (!data.image) return res.status(400).json({ message: 'Thumbnail required' });
-    if (req.files?.contentImages) data.contentImages = req.files.contentImages.map(f => `/uploads/${f.filename}`);
+    if (req.files?.contentImages) data.contentImages = await saveMultipleImages(req.files.contentImages);
     if (data.contentBlocks) try { data.contentBlocks = JSON.parse(data.contentBlocks); } catch {}
     res.status(201).json(await new Article(data).save());
   } catch (err) { res.status(400).json({ message: err.message }); }
@@ -340,10 +370,11 @@ app.put('/api/articles/:id', upload.fields([{ name: 'image', maxCount: 1 }, { na
   try {
     const data = { ...req.body };
     if (data.featured !== undefined) data.featured = toBool(data.featured);
-    if (req.files?.image) data.image = `/uploads/${req.files.image[0].filename}`;
+    if (req.files?.image?.[0]) data.image = await saveImage(req.files.image[0]);
     if (req.files?.contentImages) {
-      const newImgs = req.files.contentImages.map(f => `/uploads/${f.filename}`);
-      data.contentImages = data.contentImages ? [...JSON.parse(data.contentImages), ...newImgs] : newImgs;
+      const newImgs = await saveMultipleImages(req.files.contentImages);
+      const existing = data.contentImages ? (typeof data.contentImages === 'string' ? JSON.parse(data.contentImages) : data.contentImages) : [];
+      data.contentImages = [...existing, ...newImgs];
     }
     if (data.contentBlocks) try { data.contentBlocks = JSON.parse(data.contentBlocks); } catch {}
     res.json(await Article.findByIdAndUpdate(req.params.id, data, { new: true }));
@@ -371,7 +402,7 @@ app.get('/api/ads', async (req, res) => {
 app.post('/api/ads', upload.single('image'), async (req, res) => {
   try {
     const data = { ...req.body };
-    if (req.file) data.image = `/uploads/${req.file.filename}`;
+    if (req.file) data.image = await saveImage(req.file);
     if (data.active !== undefined) data.active = toBool(data.active);
     if (data.name && !data.title) { data.title = data.name; delete data.name; }
     if (!data.image) return res.status(400).json({ message: 'Image required' });
@@ -384,7 +415,7 @@ app.put('/api/ads/:id', upload.single('image'), async (req, res) => {
     const data = { ...req.body };
     if (data.active !== undefined) data.active = toBool(data.active);
     if (data.name && !data.title) { data.title = data.name; delete data.name; }
-    if (req.file) data.image = `/uploads/${req.file.filename}`;
+    if (req.file) data.image = await saveImage(req.file);
     res.json(await Ad.findByIdAndUpdate(req.params.id, data, { new: true }));
   } catch (err) { res.status(400).json({ message: err.message }); }
 });
@@ -443,17 +474,16 @@ app.get('/api/theme', async (req, res) => {
 app.put('/api/theme', upload.fields([{ name: 'logoImage' }, { name: 'favicon' }]), async (req, res) => {
   try {
     const data = { ...req.body, updatedAt: Date.now() };
-    if (req.files?.logoImage) data.logoImage = `/uploads/${req.files.logoImage[0].filename}`;
-    if (req.files?.favicon) data.favicon = `/uploads/${req.files.favicon[0].filename}`;
+    if (req.files?.logoImage?.[0]) data.logoImage = await saveImage(req.files.logoImage[0]);
+    if (req.files?.favicon?.[0]) data.favicon = await saveImage(req.files.favicon[0]);
     res.json(await Theme.findOneAndUpdate({}, data, { new: true, upsert: true }));
   } catch (err) { res.status(400).json({ message: err.message }); }
 });
 
 // ═══════════════════════════════════════
-//  STATS & CATEGORIES
+//  STATS, TRACKING & UTILITIES
 // ═══════════════════════════════════════
 
-// Track site visit
 app.post('/api/track-visit', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
@@ -467,7 +497,6 @@ app.post('/api/track-visit', async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Reset admin - call this if you can't login: GET /api/reset-admin
 app.get('/api/reset-admin', async (req, res) => {
   try {
     const hash = await bcrypt.hash('anesaya', 10);
