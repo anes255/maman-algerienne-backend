@@ -140,6 +140,13 @@ const Ad = mongoose.model('Ad', AdSchema);
 const Order = mongoose.model('Order', OrderSchema);
 const Theme = mongoose.model('Theme', ThemeSchema);
 
+const SiteVisitSchema = new mongoose.Schema({
+  date: { type: String, unique: true },
+  count: { type: Number, default: 0 },
+  ips: [String]
+}, { timestamps: true });
+const SiteVisit = mongoose.model('SiteVisit', SiteVisitSchema);
+
 // ─── Auth Middleware ───
 const auth = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -440,16 +447,42 @@ app.put('/api/theme', upload.fields([{ name: 'logoImage' }, { name: 'favicon' }]
 //  STATS & CATEGORIES
 // ═══════════════════════════════════════
 
+// Track site visit
+app.post('/api/track-visit', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection?.remoteAddress || req.ip || 'unknown';
+    const visit = await SiteVisit.findOneAndUpdate(
+      { date: today },
+      { $inc: { count: 1 }, $addToSet: { ips: ip } },
+      { upsert: true, new: true }
+    );
+    res.json({ today: visit.count, unique: visit.ips.length });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 app.get('/api/stats', async (req, res) => {
   try {
-    const [products, articles, orders, pendingOrders, revenueAgg] = await Promise.all([
+    const today = new Date().toISOString().split('T')[0];
+    const [products, articles, orders, pendingOrders, revenueAgg, todayVisits, allVisits, users] = await Promise.all([
       Product.countDocuments(),
       Article.countDocuments(),
       Order.countDocuments(),
       Order.countDocuments({ status: 'pending' }),
-      Order.aggregate([{ $match: { status: { $ne: 'cancelled' } } }, { $group: { _id: null, total: { $sum: '$totalAmount' } } }])
+      Order.aggregate([{ $match: { status: { $ne: 'cancelled' } } }, { $group: { _id: null, total: { $sum: '$totalAmount' } } }]),
+      SiteVisit.findOne({ date: today }),
+      SiteVisit.aggregate([{ $group: { _id: null, total: { $sum: '$count' }, uniqueTotal: { $sum: { $size: '$ips' } } } }]),
+      User.countDocuments()
     ]);
-    res.json({ products, articles, orders, pendingOrders, revenue: revenueAgg[0]?.total || 0 });
+    res.json({
+      products, articles, orders, pendingOrders,
+      revenue: revenueAgg[0]?.total || 0,
+      users,
+      todayVisits: todayVisits?.count || 0,
+      todayUniqueVisitors: todayVisits?.ips?.length || 0,
+      totalVisits: allVisits[0]?.total || 0,
+      totalUniqueVisitors: allVisits[0]?.uniqueTotal || 0
+    });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
