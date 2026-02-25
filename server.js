@@ -146,6 +146,15 @@ const Order = mongoose.model('Order', OrderSchema);
 const Theme = mongoose.model('Theme', ThemeSchema);
 const SiteVisit = mongoose.model('SiteVisit', SiteVisitSchema);
 
+const CommentSchema = new mongoose.Schema({
+  article: { type: mongoose.Schema.Types.ObjectId, ref: 'Article', required: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  userName: { type: String, required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+const Comment = mongoose.model('Comment', CommentSchema);
+
 // ═══════════════════════════════════════
 //  IMAGE HELPER - Save file buffer to MongoDB, return URL path
 // ═══════════════════════════════════════
@@ -481,6 +490,56 @@ app.put('/api/theme', upload.fields([{ name: 'logoImage' }, { name: 'favicon' }]
 });
 
 // ═══════════════════════════════════════
+//  COMMENT ROUTES
+// ═══════════════════════════════════════
+
+// Get comments for an article
+app.get('/api/comments/:articleId', async (req, res) => {
+  try {
+    const comments = await Comment.find({ article: req.params.articleId }).sort({ createdAt: -1 });
+    res.json(comments);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Get all comments (admin)
+app.get('/api/comments', async (req, res) => {
+  try {
+    const comments = await Comment.find().populate('article', 'title titleAr').sort({ createdAt: -1 });
+    res.json(comments);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Add a comment (auth required)
+app.post('/api/comments', auth, async (req, res) => {
+  try {
+    const { articleId, content } = req.body;
+    if (!articleId || !content) return res.status(400).json({ message: 'Article ID and content required' });
+    const user = await User.findById(req.user.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const comment = await new Comment({
+      article: articleId,
+      user: user._id,
+      userName: user.fullName,
+      content
+    }).save();
+    res.status(201).json(comment);
+  } catch (err) { res.status(400).json({ message: err.message }); }
+});
+
+// Delete a comment (admin only or comment owner)
+app.delete('/api/comments/:id', auth, async (req, res) => {
+  try {
+    const comment = await Comment.findById(req.params.id);
+    if (!comment) return res.status(404).json({ message: 'Comment not found' });
+    if (!req.user.isAdmin && comment.user?.toString() !== req.user.userId) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+    await Comment.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Deleted' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ═══════════════════════════════════════
 //  STATS, TRACKING & UTILITIES
 // ═══════════════════════════════════════
 
@@ -540,6 +599,17 @@ app.get('/api/categories', async (req, res) => {
     res.json({ products, articles });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
+
+// ─── Serve frontend in production ───
+const path = require('path');
+const frontendPath = path.join(__dirname, 'build');
+const fs = require('fs');
+if (fs.existsSync(frontendPath)) {
+  app.use(express.static(frontendPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendPath, 'index.html'));
+  });
+}
 
 // ─── Start Server ───
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
