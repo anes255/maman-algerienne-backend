@@ -849,11 +849,14 @@ app.get('/api/links/:id/download', async (req, res) => {
 
 // Test Cloudinary connection
 app.get('/api/test-cloudinary', async (req, res) => {
+  var cn = process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET';
+  var ak = process.env.CLOUDINARY_API_KEY || 'NOT SET';
+  var as = process.env.CLOUDINARY_API_SECRET ? 'SET (' + process.env.CLOUDINARY_API_SECRET.length + ' chars)' : 'NOT SET';
   try {
     var result = await cloudinary.api.ping();
-    res.json({ status: 'ok', cloudinary: result });
+    res.json({ status: 'ok', cloud_name: cn, api_key: ak, secret: as, cloudinary: result });
   } catch (err) {
-    res.json({ status: 'error', message: err.message });
+    res.json({ status: 'error', cloud_name: cn, api_key: ak, secret: as, error: err.message, full: JSON.stringify(err).substring(0, 500) });
   }
 });
 
