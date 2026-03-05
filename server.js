@@ -927,8 +927,48 @@ app.get('/api/links/:id/download', async (req, res) => {
     if (!link) return res.status(404).json({ message: 'File not found' });
     link.downloads = (link.downloads || 0) + 1;
     await link.save();
-    // Send the Cloudinary URL as JSON, let frontend handle the download
-    res.json({ url: link.fileUrl, fileName: link.fileName });
+    
+    // Generate a signed URL that bypasses access restrictions
+    var publicId = link.filePublicId;
+    if (publicId) {
+      var signedUrl = cloudinary.url(publicId, {
+        resource_type: 'raw',
+        sign_url: true,
+        type: 'authenticated',
+        secure: true
+      });
+      // Try signed URL first
+      try {
+        var https = require('https');
+        var http = require('http');
+        var fileUrl = link.fileUrl;
+        var protocol = fileUrl.startsWith('https') ? https : http;
+        
+        res.set('Content-Type', link.fileContentType || 'application/octet-stream');
+        res.set('Content-Disposition', 'attachment; filename="' + (link.fileName || 'download') + '"');
+        
+        protocol.get(fileUrl, function(fileRes) {
+          if (fileRes.statusCode === 200) {
+            fileRes.pipe(res);
+          } else {
+            // Try with signed URL
+            protocol.get(signedUrl, function(signedRes) {
+              if (signedRes.statusCode === 200) {
+                signedRes.pipe(res);
+              } else {
+                res.status(500).json({ message: 'Could not download file' });
+              }
+            });
+          }
+        }).on('error', function() {
+          res.status(500).json({ message: 'Download error' });
+        });
+      } catch (e) {
+        res.status(500).json({ message: e.message });
+      }
+    } else {
+      res.redirect(link.fileUrl);
+    }
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
@@ -986,7 +1026,7 @@ app.post('/api/links', function(req, res) {
       var fileResult = await uploadToCloudinary(dlFile.buffer, {
         folder: 'maman-algerienne/downloads',
         resource_type: 'raw',
-        public_id: Date.now() + '-' + dlFile.originalname.replace(/\s+/g, '-')
+        public_id: 'file-' + Date.now(), access_mode: 'public'
       });
       console.log('File uploaded:', fileResult.secure_url);
 
@@ -1035,7 +1075,7 @@ app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, {
       var fileResult = await uploadToCloudinary(dlFile.buffer, {
         folder: 'maman-algerienne/downloads',
         resource_type: 'raw',
-        public_id: Date.now() + '-' + dlFile.originalname.replace(/\s+/g, '-')
+        public_id: 'file-' + Date.now(), access_mode: 'public'
       });
       data.fileName = dlFile.originalname;
       data.fileUrl = fileResult.secure_url;
