@@ -40,8 +40,8 @@ if (!fs.existsSync(uploadsDir)) {
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Helper function to convert form checkbox values to boolean
@@ -143,7 +143,7 @@ const upload = multer({
 // Separate upload for links - uses memory so we get buffer directly
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 
 // Authentication Middleware
@@ -306,6 +306,14 @@ const downloadLinkSchema = new mongoose.Schema({
 const DownloadLink = mongoose.model('DownloadLink', downloadLinkSchema);
 
 // ===== SERVE IMAGES FROM MONGODB =====
+app.get('/api/images/debug', async (req, res) => {
+  try {
+    var count = await Image.countDocuments();
+    var sample = await Image.find().select('_id contentType filename createdAt').limit(5);
+    res.json({ total: count, samples: sample });
+  } catch (err) { res.json({ error: err.message }); }
+});
+
 app.get('/api/images/:id', async (req, res) => {
   try {
     var img = await Image.findById(req.params.id);
@@ -314,7 +322,7 @@ app.get('/api/images/:id', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=31536000');
     res.send(img.data);
   } catch (err) {
-    res.status(500).send('Error loading image');
+    res.status(500).send('Error loading image: ' + err.message);
   }
 });
 
