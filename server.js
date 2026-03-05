@@ -986,6 +986,22 @@ app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "links-v2
 var FRONTEND_URL = process.env.FRONTEND_URL || 'https://mamanalgerienne.com';
 var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend-azx3.onrender.com';
 
+// Debug: test what a share looks like
+app.get('/api/test-share/:id', async (req, res) => {
+  try {
+    var article = await Article.findById(req.params.id);
+    if (!article) return res.json({ error: 'Article not found' });
+    var image = article.image ? (article.image.startsWith('http') ? article.image : BACKEND_URL + article.image) : 'NO IMAGE';
+    res.json({
+      title: article.titleAr || article.title,
+      image_raw: article.image,
+      image_full: image,
+      frontend_url: FRONTEND_URL,
+      backend_url: BACKEND_URL
+    });
+  } catch (err) { res.json({ error: err.message }); }
+});
+
 app.get('/share/article/:id', async (req, res) => {
   try {
     var article = await Article.findById(req.params.id);
