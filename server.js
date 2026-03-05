@@ -13,9 +13,9 @@ dotenv.config();
 
 // Cloudinary config
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'domymp9hl',
+  api_key: process.env.CLOUDINARY_API_KEY || '449174563823259',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'V6RG7k47L5RAOm4cx7OArK2dvcs'
 });
 
 // Upload buffer to Cloudinary
