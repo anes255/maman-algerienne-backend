@@ -272,6 +272,15 @@ const themeSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+// Image stored in MongoDB
+const imageSchema = new mongoose.Schema({
+  data: { type: Buffer, required: true },
+  contentType: { type: String, required: true },
+  filename: String,
+  createdAt: { type: Date, default: Date.now }
+});
+const Image = mongoose.model('Image', imageSchema);
+
 const User = mongoose.model('User', userSchema);
 const Product = mongoose.model('Product', productSchema);
 const Article = mongoose.model('Article', articleSchema);
@@ -295,6 +304,19 @@ const downloadLinkSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 const DownloadLink = mongoose.model('DownloadLink', downloadLinkSchema);
+
+// ===== SERVE IMAGES FROM MONGODB =====
+app.get('/api/images/:id', async (req, res) => {
+  try {
+    var img = await Image.findById(req.params.id);
+    if (!img) return res.status(404).send('Image not found');
+    res.set('Content-Type', img.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(img.data);
+  } catch (err) {
+    res.status(500).send('Error loading image');
+  }
+});
 
 // ===== AUTHENTICATION ROUTES =====
 app.post('/api/auth/register', async (req, res) => {
