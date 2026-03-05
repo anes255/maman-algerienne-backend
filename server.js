@@ -847,58 +847,83 @@ app.get('/api/links/:id/download', async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-app.post('/api/links', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
+// Test Cloudinary connection
+app.get('/api/test-cloudinary', async (req, res) => {
   try {
-    var title = req.body.title;
-    var description = req.body.description;
-    if (!title || !description) {
-      return res.status(400).json({ message: 'Title and description required' });
-    }
-
-    // Upload image to Cloudinary
-    var imagePath = '';
-    if (req.files && req.files.image && req.files.image[0]) {
-      var imgResult = await uploadToCloudinary(req.files.image[0].buffer, {
-        folder: 'maman-algerienne/link-images',
-        resource_type: 'image'
-      });
-      imagePath = imgResult.secure_url;
-    }
-    if (!imagePath) {
-      return res.status(400).json({ message: 'Cover image required' });
-    }
-
-    // Upload file to Cloudinary
-    if (!req.files || !req.files.file || !req.files.file[0]) {
-      return res.status(400).json({ message: 'Download file required' });
-    }
-    var dlFile = req.files.file[0];
-    var fileResult = await uploadToCloudinary(dlFile.buffer, {
-      folder: 'maman-algerienne/downloads',
-      resource_type: 'raw',
-      public_id: Date.now() + '-' + dlFile.originalname.replace(/\s+/g, '-')
-    });
-
-    var link = await new DownloadLink({
-      title: title,
-      titleAr: req.body.titleAr || '',
-      description: description,
-      descriptionAr: req.body.descriptionAr || '',
-      image: imagePath,
-      fileName: dlFile.originalname,
-      fileUrl: fileResult.secure_url,
-      filePublicId: fileResult.public_id,
-      fileContentType: dlFile.mimetype,
-      fileSize: dlFile.size,
-      active: req.body.active !== 'false',
-      downloads: 0
-    }).save();
-
-    res.status(201).json(link);
+    var result = await cloudinary.api.ping();
+    res.json({ status: 'ok', cloudinary: result });
   } catch (err) {
-    console.error('CREATE LINK ERROR:', err.message);
-    res.status(500).json({ message: 'Error: ' + err.message });
+    res.json({ status: 'error', message: err.message });
   }
+});
+
+app.post('/api/links', function(req, res) {
+  uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }])(req, res, async function(multerErr) {
+    if (multerErr) {
+      console.error('MULTER ERROR:', multerErr.message);
+      return res.status(400).json({ message: 'Upload error: ' + multerErr.message });
+    }
+    try {
+      console.log('=== CREATE LINK ===');
+      console.log('Body keys:', Object.keys(req.body));
+      console.log('Files:', req.files ? Object.keys(req.files) : 'NONE');
+
+      var title = req.body.title;
+      var description = req.body.description;
+      if (!title || !description) {
+        return res.status(400).json({ message: 'Title and description required' });
+      }
+
+      // Upload image to Cloudinary
+      var imagePath = '';
+      if (req.files && req.files.image && req.files.image[0]) {
+        console.log('Uploading image to Cloudinary...');
+        var imgResult = await uploadToCloudinary(req.files.image[0].buffer, {
+          folder: 'maman-algerienne/link-images',
+          resource_type: 'image'
+        });
+        imagePath = imgResult.secure_url;
+        console.log('Image uploaded:', imagePath);
+      }
+      if (!imagePath) {
+        return res.status(400).json({ message: 'Cover image required' });
+      }
+
+      // Upload file to Cloudinary
+      if (!req.files || !req.files.file || !req.files.file[0]) {
+        return res.status(400).json({ message: 'Download file required' });
+      }
+      var dlFile = req.files.file[0];
+      console.log('Uploading file to Cloudinary:', dlFile.originalname, dlFile.size);
+      var fileResult = await uploadToCloudinary(dlFile.buffer, {
+        folder: 'maman-algerienne/downloads',
+        resource_type: 'raw',
+        public_id: Date.now() + '-' + dlFile.originalname.replace(/\s+/g, '-')
+      });
+      console.log('File uploaded:', fileResult.secure_url);
+
+      var link = await new DownloadLink({
+        title: title,
+        titleAr: req.body.titleAr || '',
+        description: description,
+        descriptionAr: req.body.descriptionAr || '',
+        image: imagePath,
+        fileName: dlFile.originalname,
+        fileUrl: fileResult.secure_url,
+        filePublicId: fileResult.public_id,
+        fileContentType: dlFile.mimetype,
+        fileSize: dlFile.size,
+        active: req.body.active !== 'false',
+        downloads: 0
+      }).save();
+      console.log('Link saved:', link._id);
+
+      res.status(201).json(link);
+    } catch (err) {
+      console.error('CREATE LINK ERROR:', err.message, err.stack);
+      res.status(500).json({ message: 'Error: ' + err.message });
+    }
+  });
 });
 
 app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
