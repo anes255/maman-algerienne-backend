@@ -453,7 +453,7 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-app.post('/api/products', upload.fields([
+app.post('/api/products', uploadMemory.fields([
   { name: 'image', maxCount: 1 },
   { name: 'images', maxCount: 5 }
 ]), async (req, res) => {
@@ -470,13 +470,16 @@ app.post('/api/products', upload.fields([
     }
     
     if (req.files && req.files.image && req.files.image[0]) {
-      productData.image = `/uploads/${req.files.image[0].filename}`;
+      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/products', resource_type: 'image' });
+      productData.image = imgRes.secure_url;
     } else if (!productData.image) {
       return res.status(400).json({ message: 'Image is required' });
     }
     
     if (req.files && req.files.images) {
-      productData.images = req.files.images.map(file => `/uploads/${file.filename}`);
+      var imgPromises = req.files.images.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/products', resource_type: 'image' }); });
+      var imgResults = await Promise.all(imgPromises);
+      productData.images = imgResults.map(function(r) { return r.secure_url; });
     }
     
     const product = new Product(productData);
@@ -489,7 +492,7 @@ app.post('/api/products', upload.fields([
   }
 });
 
-app.put('/api/products/:id', upload.fields([
+app.put('/api/products/:id', uploadMemory.fields([
   { name: 'image', maxCount: 1 },
   { name: 'images', maxCount: 5 }
 ]), async (req, res) => {
@@ -501,12 +504,15 @@ app.put('/api/products/:id', upload.fields([
       updateData.featured = convertCheckboxToBoolean(updateData.featured);
     }
     
-    if (req.files && req.files.image) {
-      updateData.image = `/uploads/${req.files.image[0].filename}`;
+    if (req.files && req.files.image && req.files.image[0]) {
+      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/products', resource_type: 'image' });
+      updateData.image = imgRes.secure_url;
     }
     
     if (req.files && req.files.images) {
-      const newImages = req.files.images.map(file => `/uploads/${file.filename}`);
+      var imgPromises = req.files.images.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/products', resource_type: 'image' }); });
+      var imgResults = await Promise.all(imgPromises);
+      const newImages = imgResults.map(function(r) { return r.secure_url; });
       updateData.images = updateData.images 
         ? [...JSON.parse(updateData.images), ...newImages]
         : newImages;
@@ -556,7 +562,7 @@ app.get('/api/articles/:id', async (req, res) => {
   }
 });
 
-app.post('/api/articles', upload.fields([
+app.post('/api/articles', uploadMemory.fields([
   { name: 'image', maxCount: 1 },
   { name: 'contentImages', maxCount: 10 }
 ]), async (req, res) => {
@@ -573,13 +579,16 @@ app.post('/api/articles', upload.fields([
     }
     
     if (req.files && req.files.image && req.files.image[0]) {
-      articleData.image = `/uploads/${req.files.image[0].filename}`;
+      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' });
+      articleData.image = imgRes.secure_url;
     } else if (!articleData.image) {
       return res.status(400).json({ message: 'Thumbnail image is required' });
     }
     
     if (req.files && req.files.contentImages) {
-      articleData.contentImages = req.files.contentImages.map(file => `/uploads/${file.filename}`);
+      var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
+      var ciResults = await Promise.all(ciPromises);
+      articleData.contentImages = ciResults.map(function(r) { return r.secure_url; });
     }
     
     // Parse contentBlocks if present
@@ -601,7 +610,7 @@ app.post('/api/articles', upload.fields([
   }
 });
 
-app.put('/api/articles/:id', upload.fields([
+app.put('/api/articles/:id', uploadMemory.fields([
   { name: 'image', maxCount: 1 },
   { name: 'contentImages', maxCount: 10 }
 ]), async (req, res) => {
@@ -613,12 +622,15 @@ app.put('/api/articles/:id', upload.fields([
       updateData.featured = convertCheckboxToBoolean(updateData.featured);
     }
     
-    if (req.files && req.files.image) {
-      updateData.image = `/uploads/${req.files.image[0].filename}`;
+    if (req.files && req.files.image && req.files.image[0]) {
+      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' });
+      updateData.image = imgRes.secure_url;
     }
     
     if (req.files && req.files.contentImages) {
-      const newImages = req.files.contentImages.map(file => `/uploads/${file.filename}`);
+      var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
+      var ciResults = await Promise.all(ciPromises);
+      const newImages = ciResults.map(function(r) { return r.secure_url; });
       updateData.contentImages = updateData.contentImages 
         ? [...JSON.parse(updateData.contentImages), ...newImages]
         : newImages;
@@ -665,7 +677,7 @@ app.get('/api/ads', async (req, res) => {
   }
 });
 
-app.post('/api/ads', upload.single('image'), async (req, res) => {
+app.post('/api/ads', uploadMemory.single('image'), async (req, res) => {
   try {
     console.log('Creating ad...');
     console.log('Body:', req.body);
@@ -673,7 +685,7 @@ app.post('/api/ads', upload.single('image'), async (req, res) => {
     
     const adData = {
       ...req.body,
-      image: req.file ? `/uploads/${req.file.filename}` : req.body.image
+      image: req.file ? (await uploadToCloudinary(req.file.buffer, { folder: 'maman-algerienne/ads', resource_type: 'image' })).secure_url : req.body.image
     };
     
     // Convert checkbox value to boolean
@@ -701,7 +713,7 @@ app.post('/api/ads', upload.single('image'), async (req, res) => {
   }
 });
 
-app.put('/api/ads/:id', upload.single('image'), async (req, res) => {
+app.put('/api/ads/:id', uploadMemory.single('image'), async (req, res) => {
   try {
     const updateData = { ...req.body };
     
@@ -717,7 +729,8 @@ app.put('/api/ads/:id', upload.single('image'), async (req, res) => {
     }
     
     if (req.file) {
-      updateData.image = `/uploads/${req.file.filename}`;
+      var adImgRes = await uploadToCloudinary(req.file.buffer, { folder: 'maman-algerienne/ads', resource_type: 'image' });
+      updateData.image = adImgRes.secure_url;
     }
     const ad = await Ad.findByIdAndUpdate(req.params.id, updateData, { new: true });
     res.json(ad);
@@ -801,15 +814,17 @@ app.get('/api/theme', async (req, res) => {
   }
 });
 
-app.put('/api/theme', upload.fields([{ name: 'logoImage' }, { name: 'favicon' }]), async (req, res) => {
+app.put('/api/theme', uploadMemory.fields([{ name: 'logoImage' }, { name: 'favicon' }]), async (req, res) => {
   try {
     const updateData = { ...req.body, updatedAt: Date.now() };
     if (req.files) {
       if (req.files.logoImage) {
-        updateData.logoImage = `/uploads/${req.files.logoImage[0].filename}`;
+        var logoRes = await uploadToCloudinary(req.files.logoImage[0].buffer, { folder: 'maman-algerienne/theme', resource_type: 'image' });
+        updateData.logoImage = logoRes.secure_url;
       }
       if (req.files.favicon) {
-        updateData.favicon = `/uploads/${req.files.favicon[0].filename}`;
+        var favRes = await uploadToCloudinary(req.files.favicon[0].buffer, { folder: 'maman-algerienne/theme', resource_type: 'image' });
+        updateData.favicon = favRes.secure_url;
       }
     }
     const theme = await Theme.findOneAndUpdate({}, updateData, { new: true, upsert: true });
@@ -1104,7 +1119,7 @@ app.delete('/api/links/:id', async (req, res) => {
 
 // ===== SHARE / OG META ENDPOINTS =====
 // Test endpoint - visit /api/test to verify latest code is deployed
-app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "comments-v3", time: new Date().toISOString() }); });
+app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "cloudinary-v4", time: new Date().toISOString() }); });
 
 // These return HTML with OG tags for social media crawlers
 
