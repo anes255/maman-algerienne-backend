@@ -927,7 +927,13 @@ app.get('/api/links/:id/download', async (req, res) => {
     if (!link) return res.status(404).json({ message: 'File not found' });
     link.downloads = (link.downloads || 0) + 1;
     await link.save();
-    res.redirect(link.fileUrl);
+    // Add fl_attachment to force download instead of browser display
+    var url = link.fileUrl;
+    if (url && url.indexOf('cloudinary') !== -1) {
+      // Insert fl_attachment flag into Cloudinary URL
+      url = url.replace('/upload/', '/upload/fl_attachment/');
+    }
+    res.redirect(url);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
