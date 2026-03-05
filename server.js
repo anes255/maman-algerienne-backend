@@ -832,32 +832,78 @@ app.get('/api/links/:id/download', async (req, res) => {
 
 app.post('/api/links', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
   try {
-    var data = Object.assign({}, req.body);
-    if (data.active !== undefined) data.active = convertCheckboxToBoolean(data.active);
-    // Save image to disk
+    console.log('Creating link - body:', JSON.stringify(req.body));
+    console.log('Creating link - files:', req.files ? Object.keys(req.files) : 'none');
+
+    var title = req.body.title;
+    var description = req.body.description;
+    if (!title || !description) {
+      return res.status(400).json({ message: 'Title and description required' });
+    }
+
+    // Handle image - save to disk
+    var imagePath = '';
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgName = Date.now() + '-' + req.files.image[0].originalname.replace(/\s+/g, '-');
-      var imgPath = path.join(__dirname, 'uploads', imgName);
-      fs.writeFileSync(imgPath, req.files.image[0].buffer);
-      data.image = '/uploads/' + imgName;
+      var imgFile = req.files.image[0];
+      var imgName = Date.now() + '-' + imgFile.originalname.replace(/\s+/g, '-');
+      var imgDiskPath = path.join(__dirname, 'uploads', imgName);
+      fs.writeFileSync(imgDiskPath, imgFile.buffer);
+      imagePath = '/uploads/' + imgName;
+      console.log('Image saved to:', imagePath);
     }
-    if (!data.image) return res.status(400).json({ message: 'Image required' });
-    // Store file as buffer in MongoDB
-    if (req.files && req.files.file && req.files.file[0]) {
-      data.fileName = req.files.file[0].originalname;
-      data.fileData = req.files.file[0].buffer;
-      data.fileContentType = req.files.file[0].mimetype;
-      data.fileSize = req.files.file[0].size;
-    } else {
-      return res.status(400).json({ message: 'File required' });
+    if (!imagePath) {
+      return res.status(400).json({ message: 'Cover image required' });
     }
-    var link = await new DownloadLink(data).save();
-    var result = link.toObject();
-    delete result.fileData;
+
+    // Handle file - store buffer in MongoDB
+    if (!req.files || !req.files.file || !req.files.file[0]) {
+      return res.status(400).json({ message: 'Download file required' });
+    }
+    var dlFile = req.files.file[0];
+    console.log('File:', dlFile.originalname, 'Size:', dlFile.size, 'Type:', dlFile.mimetype);
+
+    // Check size - MongoDB max document is 16MB
+    if (dlFile.size > 15 * 1024 * 1024) {
+      return res.status(400).json({ message: 'File too large. Maximum 15MB.' });
+    }
+
+    var linkData = {
+      title: title,
+      titleAr: req.body.titleAr || '',
+      description: description,
+      descriptionAr: req.body.descriptionAr || '',
+      image: imagePath,
+      fileName: dlFile.originalname,
+      fileData: dlFile.buffer,
+      fileContentType: dlFile.mimetype,
+      fileSize: dlFile.size,
+      active: req.body.active !== 'false',
+      downloads: 0
+    };
+
+    var link = new DownloadLink(linkData);
+    await link.save();
+    console.log('Link saved:', link._id);
+
+    // Return without fileData
+    var result = {
+      _id: link._id,
+      title: link.title,
+      titleAr: link.titleAr,
+      description: link.description,
+      descriptionAr: link.descriptionAr,
+      image: link.image,
+      fileName: link.fileName,
+      fileSize: link.fileSize,
+      fileContentType: link.fileContentType,
+      active: link.active,
+      downloads: link.downloads,
+      createdAt: link.createdAt
+    };
     res.status(201).json(result);
   } catch (err) {
-    console.error('Create link error:', err);
-    res.status(400).json({ message: err.message });
+    console.error('CREATE LINK ERROR:', err.message, err.stack);
+    res.status(500).json({ message: 'Server error: ' + err.message });
   }
 });
 
@@ -888,6 +934,65 @@ app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, {
 app.delete('/api/links/:id', async (req, res) => {
   try { await DownloadLink.findByIdAndDelete(req.params.id); res.json({ message: 'Deleted' }); }
   catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ===== SHARE / OG META ENDPOINTS =====
+// Test endpoint - visit /api/test to verify latest code is deployed
+app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "links-v2", time: new Date().toISOString() }); });
+
+// These return HTML with OG tags for social media crawlers
+
+var FRONTEND_URL = process.env.FRONTEND_URL || 'https://mamanalgerienne.com';
+var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend-azx3.onrender.com';
+
+app.get('/share/article/:id', async (req, res) => {
+  try {
+    var article = await Article.findById(req.params.id);
+    if (!article) return res.redirect(FRONTEND_URL);
+    var title = article.titleAr || article.title || 'Maman Algérienne';
+    var desc = (article.contentAr || article.content || '').substring(0, 200);
+    var image = article.image ? (article.image.startsWith('http') ? article.image : BACKEND_URL + article.image) : '';
+    var url = FRONTEND_URL + '/articles/' + article._id;
+    res.send('<!DOCTYPE html><html><head>' +
+      '<meta charset="utf-8">' +
+      '<title>' + title + '</title>' +
+      '<meta property="og:title" content="' + title.replace(/"/g, '&quot;') + '">' +
+      '<meta property="og:description" content="' + desc.replace(/"/g, '&quot;') + '">' +
+      '<meta property="og:image" content="' + image + '">' +
+      '<meta property="og:url" content="' + url + '">' +
+      '<meta property="og:type" content="article">' +
+      '<meta name="twitter:card" content="summary_large_image">' +
+      '<meta name="twitter:title" content="' + title.replace(/"/g, '&quot;') + '">' +
+      '<meta name="twitter:description" content="' + desc.replace(/"/g, '&quot;') + '">' +
+      '<meta name="twitter:image" content="' + image + '">' +
+      '<meta http-equiv="refresh" content="0;url=' + url + '">' +
+      '</head><body>Redirecting...</body></html>');
+  } catch (err) { res.redirect(FRONTEND_URL); }
+});
+
+app.get('/share/product/:id', async (req, res) => {
+  try {
+    var product = await Product.findById(req.params.id);
+    if (!product) return res.redirect(FRONTEND_URL);
+    var title = product.nameAr || product.name || 'Maman Algérienne';
+    var desc = (product.descriptionAr || product.description || '').substring(0, 200);
+    var image = product.image ? (product.image.startsWith('http') ? product.image : BACKEND_URL + product.image) : '';
+    var url = FRONTEND_URL + '/products/' + product._id;
+    res.send('<!DOCTYPE html><html><head>' +
+      '<meta charset="utf-8">' +
+      '<title>' + title + ' - ' + product.price + ' دج</title>' +
+      '<meta property="og:title" content="' + title.replace(/"/g, '&quot;') + ' - ' + product.price + ' دج">' +
+      '<meta property="og:description" content="' + desc.replace(/"/g, '&quot;') + '">' +
+      '<meta property="og:image" content="' + image + '">' +
+      '<meta property="og:url" content="' + url + '">' +
+      '<meta property="og:type" content="product">' +
+      '<meta name="twitter:card" content="summary_large_image">' +
+      '<meta name="twitter:title" content="' + title.replace(/"/g, '&quot;') + '">' +
+      '<meta name="twitter:description" content="' + desc.replace(/"/g, '&quot;') + '">' +
+      '<meta name="twitter:image" content="' + image + '">' +
+      '<meta http-equiv="refresh" content="0;url=' + url + '">' +
+      '</head><body>Redirecting...</body></html>');
+  } catch (err) { res.redirect(FRONTEND_URL); }
 });
 
 app.listen(PORT, () => {
