@@ -927,13 +927,8 @@ app.get('/api/links/:id/download', async (req, res) => {
     if (!link) return res.status(404).json({ message: 'File not found' });
     link.downloads = (link.downloads || 0) + 1;
     await link.save();
-    // Add fl_attachment to force download instead of browser display
-    var url = link.fileUrl;
-    if (url && url.indexOf('cloudinary') !== -1) {
-      // Insert fl_attachment flag into Cloudinary URL
-      url = url.replace('/upload/', '/upload/fl_attachment/');
-    }
-    res.redirect(url);
+    // Send the Cloudinary URL as JSON, let frontend handle the download
+    res.json({ url: link.fileUrl, fileName: link.fileName });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
@@ -1069,12 +1064,12 @@ app.delete('/api/links/:id', async (req, res) => {
 
 // ===== SHARE / OG META ENDPOINTS =====
 // Test endpoint - visit /api/test to verify latest code is deployed
-app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "links-v2", time: new Date().toISOString() }); });
+app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "comments-v3", time: new Date().toISOString() }); });
 
 // These return HTML with OG tags for social media crawlers
 
 var FRONTEND_URL = process.env.FRONTEND_URL || 'https://mamanalgerienne.com';
-var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend.onrender.com';
+var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend-1.onrender.com';
 
 // Debug: test what a share looks like
 app.get('/api/test-share/:id', async (req, res) => {
