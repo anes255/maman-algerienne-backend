@@ -1,8 +1,0 @@
-MONGODB_URI=your_existing_mongodb_uri_here
-JWT_SECRET=maman-algerienne-secret-2024
-PORT=5000
-FRONTEND_URL=https://mamanalgerienne.com
-BACKEND_URL=https://maman-algerienne-backend-azx3.onrender.com
-CLOUDINARY_CLOUD_NAME=domymp9hl
-CLOUDINARY_API_KEY=221521158519327
-CLOUDINARY_API_SECRET=RUas3TnX5_zfFZk9SiApStesl8o
