@@ -305,6 +305,15 @@ const downloadLinkSchema = new mongoose.Schema({
 });
 const DownloadLink = mongoose.model('DownloadLink', downloadLinkSchema);
 
+const commentSchema = new mongoose.Schema({
+  article: { type: mongoose.Schema.Types.ObjectId, ref: 'Article', required: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  userName: { type: String, required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+const Comment = mongoose.model('Comment', commentSchema);
+
 // ===== SERVE IMAGES FROM MONGODB =====
 app.get('/api/images/debug', async (req, res) => {
   try {
@@ -849,6 +858,51 @@ app.get('/api/categories', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
+// ===== COMMENT ROUTES =====
+
+app.get('/api/comments/:articleId', async (req, res) => {
+  try {
+    var comments = await Comment.find({ article: req.params.articleId }).sort({ createdAt: -1 });
+    res.json(comments);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+app.get('/api/comments', async (req, res) => {
+  try {
+    var comments = await Comment.find().populate('article', 'title titleAr').sort({ createdAt: -1 });
+    res.json(comments);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+app.post('/api/comments', authMiddleware, async (req, res) => {
+  try {
+    var articleId = req.body.articleId;
+    var content = req.body.content;
+    if (!articleId || !content) return res.status(400).json({ message: 'Article ID and content required' });
+    var user = await User.findById(req.user.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    var comment = await new Comment({
+      article: articleId,
+      user: user._id,
+      userName: user.fullName,
+      content: content
+    }).save();
+    res.status(201).json(comment);
+  } catch (err) { res.status(400).json({ message: err.message }); }
+});
+
+app.delete('/api/comments/:id', authMiddleware, async (req, res) => {
+  try {
+    var comment = await Comment.findById(req.params.id);
+    if (!comment) return res.status(404).json({ message: 'Comment not found' });
+    if (!req.user.isAdmin && String(comment.user) !== req.user.userId) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+    await Comment.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Deleted' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 // ===== DOWNLOAD LINKS ROUTES =====
 
 app.get('/api/links', async (req, res) => {
