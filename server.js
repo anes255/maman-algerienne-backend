@@ -121,6 +121,12 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }
 });
 
+// Separate upload for links - uses memory so we get buffer directly
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
 // Authentication Middleware
 const authMiddleware = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -824,21 +830,24 @@ app.get('/api/links/:id/download', async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-app.post('/api/links', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
+app.post('/api/links', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
   try {
     var data = Object.assign({}, req.body);
     if (data.active !== undefined) data.active = convertCheckboxToBoolean(data.active);
+    // Save image to disk
     if (req.files && req.files.image && req.files.image[0]) {
-      data.image = '/uploads/' + req.files.image[0].filename;
+      var imgName = Date.now() + '-' + req.files.image[0].originalname.replace(/\s+/g, '-');
+      var imgPath = path.join(__dirname, 'uploads', imgName);
+      fs.writeFileSync(imgPath, req.files.image[0].buffer);
+      data.image = '/uploads/' + imgName;
     }
     if (!data.image) return res.status(400).json({ message: 'Image required' });
+    // Store file as buffer in MongoDB
     if (req.files && req.files.file && req.files.file[0]) {
-      var filePath = req.files.file[0].path;
       data.fileName = req.files.file[0].originalname;
-      data.fileData = fs.readFileSync(filePath);
+      data.fileData = req.files.file[0].buffer;
       data.fileContentType = req.files.file[0].mimetype;
       data.fileSize = req.files.file[0].size;
-      fs.unlinkSync(filePath); // remove temp file
     } else {
       return res.status(400).json({ message: 'File required' });
     }
@@ -846,27 +855,34 @@ app.post('/api/links', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'f
     var result = link.toObject();
     delete result.fileData;
     res.status(201).json(result);
-  } catch (err) { res.status(400).json({ message: err.message }); }
+  } catch (err) {
+    console.error('Create link error:', err);
+    res.status(400).json({ message: err.message });
+  }
 });
 
-app.put('/api/links/:id', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
+app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
   try {
     var data = Object.assign({}, req.body);
     if (data.active !== undefined) data.active = convertCheckboxToBoolean(data.active);
     if (req.files && req.files.image && req.files.image[0]) {
-      data.image = '/uploads/' + req.files.image[0].filename;
+      var imgName = Date.now() + '-' + req.files.image[0].originalname.replace(/\s+/g, '-');
+      var imgPath = path.join(__dirname, 'uploads', imgName);
+      fs.writeFileSync(imgPath, req.files.image[0].buffer);
+      data.image = '/uploads/' + imgName;
     }
     if (req.files && req.files.file && req.files.file[0]) {
-      var filePath = req.files.file[0].path;
       data.fileName = req.files.file[0].originalname;
-      data.fileData = fs.readFileSync(filePath);
+      data.fileData = req.files.file[0].buffer;
       data.fileContentType = req.files.file[0].mimetype;
       data.fileSize = req.files.file[0].size;
-      fs.unlinkSync(filePath);
     }
     var link = await DownloadLink.findByIdAndUpdate(req.params.id, data, { new: true }).select('-fileData');
     res.json(link);
-  } catch (err) { res.status(400).json({ message: err.message }); }
+  } catch (err) {
+    console.error('Update link error:', err);
+    res.status(400).json({ message: err.message });
+  }
 });
 
 app.delete('/api/links/:id', async (req, res) => {
