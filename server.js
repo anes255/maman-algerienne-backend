@@ -7,8 +7,27 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
+const cloudinary = require('cloudinary').v2;
 
 dotenv.config();
+
+// Cloudinary config
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Upload buffer to Cloudinary
+var uploadToCloudinary = function(buffer, options) {
+  return new Promise(function(resolve, reject) {
+    var stream = cloudinary.uploader.upload_stream(options, function(err, result) {
+      if (err) return reject(err);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
+};
 
 const app = express();
 
@@ -267,7 +286,8 @@ const downloadLinkSchema = new mongoose.Schema({
   descriptionAr: String,
   image: String,
   fileName: { type: String, required: true },
-  fileData: { type: Buffer, required: true },
+  fileUrl: { type: String, required: true },
+  filePublicId: String,
   fileContentType: { type: String, required: true },
   fileSize: { type: Number, default: 0 },
   downloads: { type: Number, default: 0 },
@@ -805,13 +825,13 @@ app.get('/api/links', async (req, res) => {
   try {
     var q = {};
     if (req.query.active !== undefined) q.active = req.query.active === 'true';
-    res.json(await DownloadLink.find(q).select('-fileData').sort({ createdAt: -1 }));
+    res.json(await DownloadLink.find(q).sort({ createdAt: -1 }));
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
 app.get('/api/links/:id', async (req, res) => {
   try {
-    var link = await DownloadLink.findById(req.params.id).select('-fileData');
+    var link = await DownloadLink.findById(req.params.id);
     if (!link) return res.status(404).json({ message: 'Link not found' });
     res.json(link);
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -823,117 +843,110 @@ app.get('/api/links/:id/download', async (req, res) => {
     if (!link) return res.status(404).json({ message: 'File not found' });
     link.downloads = (link.downloads || 0) + 1;
     await link.save();
-    res.set('Content-Type', link.fileContentType);
-    res.set('Content-Disposition', 'attachment; filename="' + encodeURIComponent(link.fileName) + '"');
-    res.set('Content-Length', link.fileData.length);
-    res.send(link.fileData);
+    res.redirect(link.fileUrl);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
 app.post('/api/links', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
   try {
-    console.log('Creating link - body:', JSON.stringify(req.body));
-    console.log('Creating link - files:', req.files ? Object.keys(req.files) : 'none');
-
     var title = req.body.title;
     var description = req.body.description;
     if (!title || !description) {
       return res.status(400).json({ message: 'Title and description required' });
     }
 
-    // Handle image - save to disk
+    // Upload image to Cloudinary
     var imagePath = '';
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgFile = req.files.image[0];
-      var imgName = Date.now() + '-' + imgFile.originalname.replace(/\s+/g, '-');
-      var imgDiskPath = path.join(__dirname, 'uploads', imgName);
-      fs.writeFileSync(imgDiskPath, imgFile.buffer);
-      imagePath = '/uploads/' + imgName;
-      console.log('Image saved to:', imagePath);
+      var imgResult = await uploadToCloudinary(req.files.image[0].buffer, {
+        folder: 'maman-algerienne/link-images',
+        resource_type: 'image'
+      });
+      imagePath = imgResult.secure_url;
     }
     if (!imagePath) {
       return res.status(400).json({ message: 'Cover image required' });
     }
 
-    // Handle file - store buffer in MongoDB
+    // Upload file to Cloudinary
     if (!req.files || !req.files.file || !req.files.file[0]) {
       return res.status(400).json({ message: 'Download file required' });
     }
     var dlFile = req.files.file[0];
-    console.log('File:', dlFile.originalname, 'Size:', dlFile.size, 'Type:', dlFile.mimetype);
+    var fileResult = await uploadToCloudinary(dlFile.buffer, {
+      folder: 'maman-algerienne/downloads',
+      resource_type: 'raw',
+      public_id: Date.now() + '-' + dlFile.originalname.replace(/\s+/g, '-')
+    });
 
-    // Check size - MongoDB max document is 16MB
-    if (dlFile.size > 15 * 1024 * 1024) {
-      return res.status(400).json({ message: 'File too large. Maximum 15MB.' });
-    }
-
-    var linkData = {
+    var link = await new DownloadLink({
       title: title,
       titleAr: req.body.titleAr || '',
       description: description,
       descriptionAr: req.body.descriptionAr || '',
       image: imagePath,
       fileName: dlFile.originalname,
-      fileData: dlFile.buffer,
+      fileUrl: fileResult.secure_url,
+      filePublicId: fileResult.public_id,
       fileContentType: dlFile.mimetype,
       fileSize: dlFile.size,
       active: req.body.active !== 'false',
       downloads: 0
-    };
+    }).save();
 
-    var link = new DownloadLink(linkData);
-    await link.save();
-    console.log('Link saved:', link._id);
-
-    // Return without fileData
-    var result = {
-      _id: link._id,
-      title: link.title,
-      titleAr: link.titleAr,
-      description: link.description,
-      descriptionAr: link.descriptionAr,
-      image: link.image,
-      fileName: link.fileName,
-      fileSize: link.fileSize,
-      fileContentType: link.fileContentType,
-      active: link.active,
-      downloads: link.downloads,
-      createdAt: link.createdAt
-    };
-    res.status(201).json(result);
+    res.status(201).json(link);
   } catch (err) {
-    console.error('CREATE LINK ERROR:', err.message, err.stack);
-    res.status(500).json({ message: 'Server error: ' + err.message });
+    console.error('CREATE LINK ERROR:', err.message);
+    res.status(500).json({ message: 'Error: ' + err.message });
   }
 });
 
 app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }]), async (req, res) => {
   try {
-    var data = Object.assign({}, req.body);
-    if (data.active !== undefined) data.active = convertCheckboxToBoolean(data.active);
+    var data = {};
+    if (req.body.title) data.title = req.body.title;
+    if (req.body.titleAr !== undefined) data.titleAr = req.body.titleAr;
+    if (req.body.description) data.description = req.body.description;
+    if (req.body.descriptionAr !== undefined) data.descriptionAr = req.body.descriptionAr;
+    if (req.body.active !== undefined) data.active = req.body.active !== 'false';
+
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgName = Date.now() + '-' + req.files.image[0].originalname.replace(/\s+/g, '-');
-      var imgPath = path.join(__dirname, 'uploads', imgName);
-      fs.writeFileSync(imgPath, req.files.image[0].buffer);
-      data.image = '/uploads/' + imgName;
+      var imgResult = await uploadToCloudinary(req.files.image[0].buffer, {
+        folder: 'maman-algerienne/link-images',
+        resource_type: 'image'
+      });
+      data.image = imgResult.secure_url;
     }
     if (req.files && req.files.file && req.files.file[0]) {
-      data.fileName = req.files.file[0].originalname;
-      data.fileData = req.files.file[0].buffer;
-      data.fileContentType = req.files.file[0].mimetype;
-      data.fileSize = req.files.file[0].size;
+      var dlFile = req.files.file[0];
+      var fileResult = await uploadToCloudinary(dlFile.buffer, {
+        folder: 'maman-algerienne/downloads',
+        resource_type: 'raw',
+        public_id: Date.now() + '-' + dlFile.originalname.replace(/\s+/g, '-')
+      });
+      data.fileName = dlFile.originalname;
+      data.fileUrl = fileResult.secure_url;
+      data.filePublicId = fileResult.public_id;
+      data.fileContentType = dlFile.mimetype;
+      data.fileSize = dlFile.size;
     }
-    var link = await DownloadLink.findByIdAndUpdate(req.params.id, data, { new: true }).select('-fileData');
+    var link = await DownloadLink.findByIdAndUpdate(req.params.id, data, { new: true });
     res.json(link);
   } catch (err) {
-    console.error('Update link error:', err);
+    console.error('Update link error:', err.message);
     res.status(400).json({ message: err.message });
   }
 });
 
 app.delete('/api/links/:id', async (req, res) => {
-  try { await DownloadLink.findByIdAndDelete(req.params.id); res.json({ message: 'Deleted' }); }
-  catch (err) { res.status(500).json({ message: err.message }); }
+  try {
+    var link = await DownloadLink.findById(req.params.id);
+    if (link && link.filePublicId) {
+      cloudinary.uploader.destroy(link.filePublicId, { resource_type: 'raw' }).catch(function() {});
+    }
+    await DownloadLink.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Deleted' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
 // ===== SHARE / OG META ENDPOINTS =====
