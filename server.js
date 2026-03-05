@@ -1068,7 +1068,7 @@ app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "links-v2
 // These return HTML with OG tags for social media crawlers
 
 var FRONTEND_URL = process.env.FRONTEND_URL || 'https://mamanalgerienne.com';
-var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend-azx3.onrender.com';
+var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend.onrender.com';
 
 // Debug: test what a share looks like
 app.get('/api/test-share/:id', async (req, res) => {
