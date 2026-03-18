@@ -213,11 +213,14 @@ const articleSchema = new mongoose.Schema({
     videoUrl: String, // For video blocks
     linkArticleId: String, // For article-link blocks - the target article ID
     linkText: String, // For article-link blocks - custom display text
+    _blobIdx: Number, // Temporary field for blob URL to Cloudinary URL mapping
     settings: {
-      headingSize: { type: String, enum: ['h2', 'h3', 'h4'], default: 'h2' }, // For headings
-      imageSize: { type: String, enum: ['small', 'medium', 'large', 'full'], default: 'medium' }, // For images
-      videoSize: { type: String, enum: ['medium', 'large', 'full'], default: 'large' }, // For videos
-      alignment: { type: String, enum: ['left', 'center', 'right'], default: 'left' }
+      size: String, // Generic size field used by editor (h1-h4, small/medium/large/full)
+      align: { type: String, enum: ['left', 'center', 'right'], default: 'right' }, // Alignment used by editor
+      headingSize: { type: String, enum: ['h2', 'h3', 'h4'], default: 'h2' },
+      imageSize: { type: String, enum: ['small', 'medium', 'large', 'full'], default: 'medium' },
+      videoSize: { type: String, enum: ['medium', 'large', 'full'], default: 'large' },
+      alignment: { type: String, enum: ['left', 'center', 'right'], default: 'right' }
     },
     order: Number
   }],
@@ -602,6 +605,16 @@ app.post('/api/articles', uploadMemory.fields([
       }
     }
     
+    // Resolve blob index markers in content blocks to actual Cloudinary URLs
+    if (articleData.contentBlocks) {
+      articleData.contentBlocks.forEach(function(block) {
+        if (block._blobIdx !== undefined && block._blobIdx >= 0 && articleData.contentImages && articleData.contentImages[block._blobIdx]) {
+          block.imageUrl = articleData.contentImages[block._blobIdx];
+        }
+        delete block._blobIdx;
+      });
+    }
+    
     const article = new Article(articleData);
     await article.save();
     console.log('Article created:', article);
@@ -629,13 +642,16 @@ app.put('/api/articles/:id', uploadMemory.fields([
       updateData.image = imgRes.secure_url;
     }
     
+    var newUploadedImages = [];
     if (req.files && req.files.contentImages) {
       var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
       var ciResults = await Promise.all(ciPromises);
-      const newImages = ciResults.map(function(r) { return r.secure_url; });
-      updateData.contentImages = updateData.contentImages 
-        ? [...JSON.parse(updateData.contentImages), ...newImages]
-        : newImages;
+      newUploadedImages = ciResults.map(function(r) { return r.secure_url; });
+      
+      // Merge with existing content images from DB
+      var existingArticle = await Article.findById(req.params.id);
+      var existingImages = (existingArticle && existingArticle.contentImages) ? existingArticle.contentImages : [];
+      updateData.contentImages = [...existingImages, ...newUploadedImages];
     }
     
     // Parse contentBlocks if present
@@ -645,6 +661,16 @@ app.put('/api/articles/:id', uploadMemory.fields([
       } catch (e) {
         console.error('Error parsing contentBlocks:', e);
       }
+    }
+    
+    // Resolve blob index markers in content blocks to actual Cloudinary URLs
+    if (updateData.contentBlocks) {
+      updateData.contentBlocks.forEach(function(block) {
+        if (block._blobIdx !== undefined && block._blobIdx >= 0 && newUploadedImages[block._blobIdx]) {
+          block.imageUrl = newUploadedImages[block._blobIdx];
+        }
+        delete block._blobIdx;
+      });
     }
     
     const article = await Article.findByIdAndUpdate(req.params.id, updateData, { new: true });
