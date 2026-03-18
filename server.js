@@ -207,10 +207,12 @@ const articleSchema = new mongoose.Schema({
   // Enhanced content blocks for flexible article creation
   contentBlocks: [{
     id: String,
-    type: { type: String, enum: ['heading', 'paragraph', 'image', 'video'], required: true },
+    type: { type: String, enum: ['heading', 'paragraph', 'image', 'video', 'article-link'], required: true },
     content: String, // For heading/paragraph text
     imageUrl: String, // For image blocks
     videoUrl: String, // For video blocks
+    linkArticleId: String, // For article-link blocks - the target article ID
+    linkText: String, // For article-link blocks - custom display text
     settings: {
       headingSize: { type: String, enum: ['h2', 'h3', 'h4'], default: 'h2' }, // For headings
       imageSize: { type: String, enum: ['small', 'medium', 'large', 'full'], default: 'medium' }, // For images
