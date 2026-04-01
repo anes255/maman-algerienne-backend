@@ -225,6 +225,7 @@ const articleSchema = new mongoose.Schema({
     order: Number
   }],
   author: { type: String, default: 'Admin' },
+  relatedArticles: [String], // Array of article IDs to show at bottom
   featured: { type: Boolean, default: false },
   views: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
@@ -615,6 +616,11 @@ app.post('/api/articles', uploadMemory.fields([
       });
     }
     
+    // Parse relatedArticles if present
+    if (articleData.relatedArticles && typeof articleData.relatedArticles === 'string') {
+      try { articleData.relatedArticles = JSON.parse(articleData.relatedArticles); } catch(e) { articleData.relatedArticles = []; }
+    }
+    
     const article = new Article(articleData);
     await article.save();
     console.log('Article created:', article);
@@ -671,6 +677,11 @@ app.put('/api/articles/:id', uploadMemory.fields([
         }
         delete block._blobIdx;
       });
+    }
+    
+    // Parse relatedArticles if present
+    if (updateData.relatedArticles && typeof updateData.relatedArticles === 'string') {
+      try { updateData.relatedArticles = JSON.parse(updateData.relatedArticles); } catch(e) { updateData.relatedArticles = []; }
     }
     
     const article = await Article.findByIdAndUpdate(req.params.id, updateData, { new: true });
