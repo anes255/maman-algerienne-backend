@@ -207,12 +207,14 @@ const articleSchema = new mongoose.Schema({
   // Enhanced content blocks for flexible article creation
   contentBlocks: [{
     id: String,
-    type: { type: String, enum: ['heading', 'paragraph', 'image', 'video', 'article-link'], required: true },
+    type: { type: String, enum: ['heading', 'paragraph', 'image', 'video', 'article-link', 'download-link'], required: true },
     content: String, // For heading/paragraph text
     imageUrl: String, // For image blocks
     videoUrl: String, // For video blocks
     linkArticleId: String, // For article-link blocks - the target article ID
     linkText: String, // For article-link blocks - custom display text
+    downloadLinkId: String, // For download-link blocks - the target download file ID
+    downloadText: String, // For download-link blocks - custom button text
     _blobIdx: Number, // Temporary field for blob URL to Cloudinary URL mapping
     settings: {
       size: String, // Generic size field used by editor (h1-h4, small/medium/large/full)
