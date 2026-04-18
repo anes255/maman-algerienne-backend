@@ -7,27 +7,55 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
-const cloudinary = require('cloudinary').v2;
+const { Readable } = require('stream');
 
 dotenv.config();
 
-// Cloudinary config
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'domymp9hl',
-  api_key: process.env.CLOUDINARY_API_KEY || '449174563823259',
-  api_secret: process.env.CLOUDINARY_API_SECRET || 'V6RG7k47L5RAOm4cx7OArK2dvcs'
-});
+const BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend-1.onrender.com';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://mamanalgerienne.com';
 
-// Upload buffer to Cloudinary
-var uploadToCloudinary = function(buffer, options) {
-  return new Promise(function(resolve, reject) {
-    var stream = cloudinary.uploader.upload_stream(options, function(err, result) {
-      if (err) return reject(err);
-      resolve(result);
+// Upload image buffer to MongoDB Image collection. Returns absolute URL.
+async function uploadImageToMongo(buffer, contentType, filename) {
+  const img = await new Image({ data: buffer, contentType: contentType || 'image/jpeg', filename: filename || '' }).save();
+  return BACKEND_URL + '/api/images/' + img._id;
+}
+
+// GridFS bucket for download files (lazy init after Mongo connects).
+let _filesBucket = null;
+function getFilesBucket() {
+  if (_filesBucket) return _filesBucket;
+  if (mongoose.connection && mongoose.connection.db) {
+    _filesBucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'files' });
+  }
+  return _filesBucket;
+}
+
+// Backwards-compatible shim that mimics the old Cloudinary response shape.
+// `input` may be a Buffer or a multer file object ({ buffer, mimetype, originalname }).
+async function uploadToCloudinary(input, options) {
+  const buffer = Buffer.isBuffer(input) ? input : input.buffer;
+  const mimetype = (input && input.mimetype) || (options && options.contentType) || 'application/octet-stream';
+  const originalname = (input && input.originalname) || (options && options.public_id) || '';
+
+  if (options && options.resource_type === 'raw') {
+    const bucket = getFilesBucket();
+    if (!bucket) throw new Error('GridFS bucket not initialized');
+    const filename = originalname || ('file-' + Date.now());
+    return await new Promise(function(resolve, reject) {
+      const uploadStream = bucket.openUploadStream(filename, { contentType: mimetype });
+      uploadStream.on('error', reject);
+      uploadStream.on('finish', function() {
+        const id = uploadStream.id;
+        resolve({ secure_url: BACKEND_URL + '/api/files/' + id, public_id: String(id) });
+      });
+      Readable.from(buffer).pipe(uploadStream);
     });
-    stream.end(buffer);
-  });
-};
+  }
+
+  const url = await uploadImageToMongo(buffer, mimetype.startsWith('image/') ? mimetype : 'image/jpeg', originalname);
+  const id = url.split('/').pop();
+  return { secure_url: url, public_id: id };
+}
 
 const app = express();
 
@@ -343,6 +371,26 @@ app.get('/api/images/:id', async (req, res) => {
   }
 });
 
+// ===== SERVE DOWNLOAD FILES FROM GRIDFS =====
+app.get('/api/files/:id', async (req, res) => {
+  try {
+    const bucket = getFilesBucket();
+    if (!bucket) return res.status(503).send('Storage not ready');
+    const id = new mongoose.Types.ObjectId(req.params.id);
+    const filesColl = mongoose.connection.db.collection('files.files');
+    const fileDoc = await filesColl.findOne({ _id: id });
+    if (!fileDoc) return res.status(404).send('File not found');
+    res.set('Content-Type', (fileDoc.contentType) || 'application/octet-stream');
+    res.set('Content-Length', fileDoc.length);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    bucket.openDownloadStream(id).on('error', function(e) {
+      res.status(500).end('Stream error: ' + e.message);
+    }).pipe(res);
+  } catch (err) {
+    res.status(500).send('Error loading file: ' + err.message);
+  }
+});
+
 // ===== AUTHENTICATION ROUTES =====
 app.post('/api/auth/register', async (req, res) => {
   try {
@@ -478,14 +526,14 @@ app.post('/api/products', uploadMemory.fields([
     }
     
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/products', resource_type: 'image' });
+      var imgRes = await uploadToCloudinary(req.files.image[0], { folder: 'maman-algerienne/products', resource_type: 'image' });
       productData.image = imgRes.secure_url;
     } else if (!productData.image) {
       return res.status(400).json({ message: 'Image is required' });
     }
     
     if (req.files && req.files.images) {
-      var imgPromises = req.files.images.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/products', resource_type: 'image' }); });
+      var imgPromises = req.files.images.map(function(file) { return uploadToCloudinary(file, { folder: 'maman-algerienne/products', resource_type: 'image' }); });
       var imgResults = await Promise.all(imgPromises);
       productData.images = imgResults.map(function(r) { return r.secure_url; });
     }
@@ -513,12 +561,12 @@ app.put('/api/products/:id', uploadMemory.fields([
     }
     
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/products', resource_type: 'image' });
+      var imgRes = await uploadToCloudinary(req.files.image[0], { folder: 'maman-algerienne/products', resource_type: 'image' });
       updateData.image = imgRes.secure_url;
     }
     
     if (req.files && req.files.images) {
-      var imgPromises = req.files.images.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/products', resource_type: 'image' }); });
+      var imgPromises = req.files.images.map(function(file) { return uploadToCloudinary(file, { folder: 'maman-algerienne/products', resource_type: 'image' }); });
       var imgResults = await Promise.all(imgPromises);
       const newImages = imgResults.map(function(r) { return r.secure_url; });
       updateData.images = updateData.images 
@@ -587,14 +635,14 @@ app.post('/api/articles', uploadMemory.fields([
     }
     
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' });
+      var imgRes = await uploadToCloudinary(req.files.image[0], { folder: 'maman-algerienne/articles', resource_type: 'image' });
       articleData.image = imgRes.secure_url;
     } else if (!articleData.image) {
       return res.status(400).json({ message: 'Thumbnail image is required' });
     }
     
     if (req.files && req.files.contentImages) {
-      var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
+      var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
       var ciResults = await Promise.all(ciPromises);
       articleData.contentImages = ciResults.map(function(r) { return r.secure_url; });
     }
@@ -646,13 +694,13 @@ app.put('/api/articles/:id', uploadMemory.fields([
     }
     
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgRes = await uploadToCloudinary(req.files.image[0].buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' });
+      var imgRes = await uploadToCloudinary(req.files.image[0], { folder: 'maman-algerienne/articles', resource_type: 'image' });
       updateData.image = imgRes.secure_url;
     }
     
     var newUploadedImages = [];
     if (req.files && req.files.contentImages) {
-      var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file.buffer, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
+      var ciPromises = req.files.contentImages.map(function(file) { return uploadToCloudinary(file, { folder: 'maman-algerienne/articles', resource_type: 'image' }); });
       var ciResults = await Promise.all(ciPromises);
       newUploadedImages = ciResults.map(function(r) { return r.secure_url; });
       
@@ -726,7 +774,7 @@ app.post('/api/ads', uploadMemory.single('image'), async (req, res) => {
     
     const adData = {
       ...req.body,
-      image: req.file ? (await uploadToCloudinary(req.file.buffer, { folder: 'maman-algerienne/ads', resource_type: 'image' })).secure_url : req.body.image
+      image: req.file ? (await uploadToCloudinary(req.file, { folder: 'maman-algerienne/ads', resource_type: 'image' })).secure_url : req.body.image
     };
     
     // Convert checkbox value to boolean
@@ -770,7 +818,7 @@ app.put('/api/ads/:id', uploadMemory.single('image'), async (req, res) => {
     }
     
     if (req.file) {
-      var adImgRes = await uploadToCloudinary(req.file.buffer, { folder: 'maman-algerienne/ads', resource_type: 'image' });
+      var adImgRes = await uploadToCloudinary(req.file, { folder: 'maman-algerienne/ads', resource_type: 'image' });
       updateData.image = adImgRes.secure_url;
     }
     const ad = await Ad.findByIdAndUpdate(req.params.id, updateData, { new: true });
@@ -860,11 +908,11 @@ app.put('/api/theme', uploadMemory.fields([{ name: 'logoImage' }, { name: 'favic
     const updateData = { ...req.body, updatedAt: Date.now() };
     if (req.files) {
       if (req.files.logoImage) {
-        var logoRes = await uploadToCloudinary(req.files.logoImage[0].buffer, { folder: 'maman-algerienne/theme', resource_type: 'image' });
+        var logoRes = await uploadToCloudinary(req.files.logoImage[0], { folder: 'maman-algerienne/theme', resource_type: 'image' });
         updateData.logoImage = logoRes.secure_url;
       }
       if (req.files.favicon) {
-        var favRes = await uploadToCloudinary(req.files.favicon[0].buffer, { folder: 'maman-algerienne/theme', resource_type: 'image' });
+        var favRes = await uploadToCloudinary(req.files.favicon[0], { folder: 'maman-algerienne/theme', resource_type: 'image' });
         updateData.favicon = favRes.secure_url;
       }
     }
@@ -983,61 +1031,35 @@ app.get('/api/links/:id/download', async (req, res) => {
     if (!link) return res.status(404).json({ message: 'File not found' });
     link.downloads = (link.downloads || 0) + 1;
     await link.save();
-    
-    // Generate a signed URL that bypasses access restrictions
-    var publicId = link.filePublicId;
-    if (publicId) {
-      var signedUrl = cloudinary.url(publicId, {
-        resource_type: 'raw',
-        sign_url: true,
-        type: 'authenticated',
-        secure: true
-      });
-      // Try signed URL first
+
+    res.set('Content-Type', link.fileContentType || 'application/octet-stream');
+    res.set('Content-Disposition', 'attachment; filename="' + (link.fileName || 'download') + '"');
+
+    var bucket = getFilesBucket();
+    if (link.filePublicId && bucket) {
       try {
-        var https = require('https');
-        var http = require('http');
-        var fileUrl = link.fileUrl;
-        var protocol = fileUrl.startsWith('https') ? https : http;
-        
-        res.set('Content-Type', link.fileContentType || 'application/octet-stream');
-        res.set('Content-Disposition', 'attachment; filename="' + (link.fileName || 'download') + '"');
-        
-        protocol.get(fileUrl, function(fileRes) {
-          if (fileRes.statusCode === 200) {
-            fileRes.pipe(res);
-          } else {
-            // Try with signed URL
-            protocol.get(signedUrl, function(signedRes) {
-              if (signedRes.statusCode === 200) {
-                signedRes.pipe(res);
-              } else {
-                res.status(500).json({ message: 'Could not download file' });
-              }
-            });
-          }
-        }).on('error', function() {
-          res.status(500).json({ message: 'Download error' });
-        });
+        var fileId = new mongoose.Types.ObjectId(link.filePublicId);
+        return bucket.openDownloadStream(fileId).on('error', function(e) {
+          res.status(500).end('Stream error: ' + e.message);
+        }).pipe(res);
       } catch (e) {
-        res.status(500).json({ message: e.message });
+        // fall through to redirect below
       }
-    } else {
-      res.redirect(link.fileUrl);
     }
+    // Legacy fallback (e.g., old Cloudinary URLs still in DB)
+    res.redirect(link.fileUrl);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Test Cloudinary connection
-app.get('/api/test-cloudinary', async (req, res) => {
-  var cn = process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET';
-  var ak = process.env.CLOUDINARY_API_KEY || 'NOT SET';
-  var as = process.env.CLOUDINARY_API_SECRET ? 'SET (' + process.env.CLOUDINARY_API_SECRET.length + ' chars)' : 'NOT SET';
+// Storage health check
+app.get('/api/test-storage', async (req, res) => {
   try {
-    var result = await cloudinary.api.ping();
-    res.json({ status: 'ok', cloud_name: cn, api_key: ak, secret: as, cloudinary: result });
+    var imgCount = await Image.countDocuments();
+    var bucket = getFilesBucket();
+    var fileCount = bucket ? await mongoose.connection.db.collection('files.files').countDocuments() : 0;
+    res.json({ status: 'ok', storage: 'mongodb', images: imgCount, files: fileCount });
   } catch (err) {
-    res.json({ status: 'error', cloud_name: cn, api_key: ak, secret: as, error: err.message, full: JSON.stringify(err).substring(0, 500) });
+    res.json({ status: 'error', error: err.message });
   }
 });
 
@@ -1062,7 +1084,7 @@ app.post('/api/links', function(req, res) {
       var imagePath = '';
       if (req.files && req.files.image && req.files.image[0]) {
         console.log('Uploading image to Cloudinary...');
-        var imgResult = await uploadToCloudinary(req.files.image[0].buffer, {
+        var imgResult = await uploadToCloudinary(req.files.image[0], {
           folder: 'maman-algerienne/link-images',
           resource_type: 'image'
         });
@@ -1079,7 +1101,7 @@ app.post('/api/links', function(req, res) {
       }
       var dlFile = req.files.file[0];
       console.log('Uploading file to Cloudinary:', dlFile.originalname, dlFile.size);
-      var fileResult = await uploadToCloudinary(dlFile.buffer, {
+      var fileResult = await uploadToCloudinary(dlFile, {
         folder: 'maman-algerienne/downloads',
         resource_type: 'raw',
         public_id: 'file-' + Date.now(), access_mode: 'public'
@@ -1120,7 +1142,7 @@ app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, {
     if (req.body.active !== undefined) data.active = req.body.active !== 'false';
 
     if (req.files && req.files.image && req.files.image[0]) {
-      var imgResult = await uploadToCloudinary(req.files.image[0].buffer, {
+      var imgResult = await uploadToCloudinary(req.files.image[0], {
         folder: 'maman-algerienne/link-images',
         resource_type: 'image'
       });
@@ -1128,7 +1150,7 @@ app.put('/api/links/:id', uploadMemory.fields([{ name: 'image', maxCount: 1 }, {
     }
     if (req.files && req.files.file && req.files.file[0]) {
       var dlFile = req.files.file[0];
-      var fileResult = await uploadToCloudinary(dlFile.buffer, {
+      var fileResult = await uploadToCloudinary(dlFile, {
         folder: 'maman-algerienne/downloads',
         resource_type: 'raw',
         public_id: 'file-' + Date.now(), access_mode: 'public'
@@ -1151,7 +1173,10 @@ app.delete('/api/links/:id', async (req, res) => {
   try {
     var link = await DownloadLink.findById(req.params.id);
     if (link && link.filePublicId) {
-      cloudinary.uploader.destroy(link.filePublicId, { resource_type: 'raw' }).catch(function() {});
+      try {
+        var bucket = getFilesBucket();
+        if (bucket) bucket.delete(new mongoose.Types.ObjectId(link.filePublicId), function() {});
+      } catch (e) { /* ignore */ }
     }
     await DownloadLink.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted' });
@@ -1160,12 +1185,9 @@ app.delete('/api/links/:id', async (req, res) => {
 
 // ===== SHARE / OG META ENDPOINTS =====
 // Test endpoint - visit /api/test to verify latest code is deployed
-app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "cloudinary-v4", time: new Date().toISOString() }); });
+app.get("/api/test", (req, res) => { res.json({ status: "ok", version: "mongodb-storage-v1", time: new Date().toISOString() }); });
 
 // These return HTML with OG tags for social media crawlers
-
-var FRONTEND_URL = process.env.FRONTEND_URL || 'https://mamanalgerienne.com';
-var BACKEND_URL = process.env.BACKEND_URL || 'https://maman-algerienne-backend-1.onrender.com';
 
 // Debug: test what a share looks like
 app.get('/api/test-share/:id', async (req, res) => {
