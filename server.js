@@ -492,7 +492,7 @@ app.get('/api/products', async (req, res) => {
     if (category) query.category = category;
     if (featured) query.featured = true;
     
-    const products = await Product.find(query).sort({ createdAt: -1 });
+    const products = await Product.find(query).sort({ createdAt: -1 }).lean();
     res.json(products);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -598,7 +598,10 @@ app.get('/api/articles', async (req, res) => {
     if (category) query.category = category;
     if (featured) query.featured = true;
     
-    const articles = await Article.find(query).sort({ createdAt: -1 });
+    const articles = await Article.find(query)
+      .select('-contentBlocks -contentImages')
+      .sort({ createdAt: -1 })
+      .lean();
     res.json(articles);
   } catch (error) {
     console.error('Error fetching articles:', error);
@@ -608,10 +611,9 @@ app.get('/api/articles', async (req, res) => {
 
 app.get('/api/articles/:id', async (req, res) => {
   try {
-    const article = await Article.findById(req.params.id);
+    const article = await Article.findById(req.params.id).lean();
     if (!article) return res.status(404).json({ message: 'Article not found' });
-    article.views += 1;
-    await article.save();
+    Article.updateOne({ _id: article._id }, { $inc: { views: 1 } }).exec();
     res.json(article);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -758,7 +760,7 @@ app.get('/api/ads', async (req, res) => {
     if (position) query.position = position;
     if (active !== undefined) query.active = active === 'true';
     
-    const ads = await Ad.find(query).sort({ createdAt: -1 });
+    const ads = await Ad.find(query).sort({ createdAt: -1 }).lean();
     res.json(ads);
   } catch (error) {
     console.error('Error fetching ads:', error);
